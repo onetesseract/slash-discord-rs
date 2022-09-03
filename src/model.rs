@@ -2,11 +2,14 @@
 #![allow(missing_docs)]
 #![allow(deprecated)]
 
+extern crate serde_repr;
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use self::serde_repr::{Deserialize_repr, Serialize_repr};
 use serde_json::Value;
 
 use super::{Error, Object, Result};
@@ -18,7 +21,7 @@ macro_rules! req {
 		try!($opt.ok_or(Error::Decode(
 			concat!("Type mismatch in model:", line!(), ": ", stringify!($opt)),
 			Value::Null
-			)))
+		)))
 	};
 }
 
@@ -113,7 +116,14 @@ macro_rules! id {
 				/// Discord generates identifiers using a scheme based on [Twitter Snowflake]
 				/// (https://github.com/twitter/snowflake/tree/b3f6a3c6ca8e1b6847baa6ff42bf72201e2c2231#snowflake).
 				pub fn creation_date(&self) -> DateTime<Utc> {
-					Utc.timestamp((1420070400 + (self.0 >> 22) / 1000) as i64, 0)
+					let raw = (self.0 / 4194304 + 1420070400000);
+					let ns: u32 = ((raw % 1000) * 1000) as u32;
+					Utc.timestamp(((raw - (raw % 1000)) / 1000) as i64, ns)
+				}
+
+				/// Get the timestamp as a number of milliseconds
+				pub fn creation_date_ms(&self) -> u64 {
+					(self.0 / 4194304) + 1420070400000
 				}
 			}
 
@@ -141,12 +151,16 @@ id! {
 	RoleId;
 	/// An identifier for an Emoji
 	EmojiId;
+	/// An identifier for an Interaction
+	InteractionId;
+	/// A command identifier
+	CommandId;
 }
 
 impl ServerId {
 	/// Get the `ChannelId` of this server's main text channel.
 	#[inline(always)]
-	#[deprecated(note="No longer guaranteed to exist/be accurate.")]
+	#[deprecated(note = "No longer guaranteed to exist/be accurate.")]
 	pub fn main(self) -> ChannelId {
 		ChannelId(self.0)
 	}
@@ -432,6 +446,151 @@ impl Member {
 		}
 	}
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicationCommand {
+	/// The unique id of the command
+	pub id: Option<CommandId>,
+	/// The type of the command
+	pub r#type: Option<u16>,
+	/// ID of the parent application
+	pub application_id: ApplicationId,
+	/// Guild ID of the command if not global
+	pub guild_id: Option<ServerId>,
+	/// The name of the command
+	pub name: String,
+	/// Description for chat_input commands, empty for User and Message commands: 1-100 characters
+	pub description: String,
+	/// The parameters for the command: max 25
+	pub options: Option<Vec<ApplicationCommandOption>>,
+	/// Whether the command is enabled by default when the app is added to a guild
+	pub default_permission: Option<bool>,
+	// TODO: version
+}
+
+#[derive(Debug, Clone, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum ApplicationCommandOptionType {
+	SubCommand = 1,
+	SubCommandGroup = 2,
+	String = 3,
+	Integer = 4,
+	Boolean = 5,
+	User = 6,
+	Channel = 7,
+	Role = 8,
+	Mentionable = 9,
+	Number = 10,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicationCommandOption {
+	/// The type of the option
+	pub r#type: ApplicationCommandOptionType,
+	/// Option name: 1-32 characters
+	pub name: String,
+	/// A description of the option: 1-100 characters
+	pub description: String,
+	/// Whether this subcommand is required: default false
+	pub required: Option<bool>,
+	// Choices for String, int, and float types for the user to pick from: max 25
+	// TODO: pub choices: Option<Vec<ApplicationCommandOptionChoice>>,
+	/// If this is a subcommand these are the sub-parameters
+	pub options: Option<Vec<ApplicationCommandOption>>,
+	/// If this is a channel option, restrict it to these types of channel
+	pub channel_types: Option<Vec<ChannelType>>,
+	/// If this is a int or float option, the min value
+	pub min_value: Option<f64>,
+	/// If this is a int or float option, the max value
+	pub max_value: Option<f64>,
+	/// Whether autocomplete is enabled for this option. Cannot be true if Choice are present
+	pub autocomplete: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicationCommandInteractionParam {
+	/// The name of the parameter
+	pub name: String,
+	/// The value of the application command option type
+	/// SUB_COMMAND	      1
+	/// SUB_COMMAND_GROUP 2
+	/// STRING	          3
+	/// INTEGER	          4   Any integer between -2^53 and 2^53
+	/// BOOLEAN	          5
+	/// USER	          6
+	/// CHANNEL	          7   Includes all channel types + categories
+	/// ROLE	          8
+	/// MENTIONABLE	      9   Includes users and roles
+	/// NUMBER	         10   Any double between -2^53 and 2^53
+	pub r#type: ApplicationCommandOptionType,
+	/// The actual value passed
+	pub value: Option<Value>,
+	/// Vector of application command interactions
+	/// Present if a group or subcommand
+	pub options: Option<Vec<ApplicationCommandInteractionParam>>,
+	/// True if this is the currently selected value for autocomplete
+	pub focused: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum ApplicationCommandType {
+	ChatInput = 1,
+	User = 2,
+	Message = 3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionData {
+	/// The ID of the invoked command
+	pub id: Option<CommandId>,
+	/// The name ofthe invoked command
+	pub name: Option<String>,
+	/// The type of the invoked command - https://canary.discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-types
+	///
+	/// 1 CHAT_INPUT - Slash commands
+	/// 2 USER       - UI based right-click thing
+	/// 3 MESSAGE    - UI based right-click thing part 2
+	pub r#type: Option<ApplicationCommandType>,
+	//TODO: resolved data
+	///Array of application command interaction data options from the user
+	pub options: Option<Vec<ApplicationCommandInteractionParam>>,
+	/// The custom ID of the component - only components
+	pub custom_id: Option<String>,
+	/// The type of the component
+	pub component_type: Option<u16>,
+	// TODO: values
+	// TODOL target_id
+}
+
+#[derive(Debug, Clone, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum InteractionType {
+	Ping = 1,
+	ApplicationCommand = 2,
+	MessageComponent = 3,
+	ApplicationCommandAutocomplete = 4,
+}
+
+/// An interaction - god knows what this does
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Interaction {
+	/// The interaction type - https://canary.discord.com/developers/docs/interactions/receiving-and-responding#interaction-object-interaction-type1
+	pub r#type: InteractionType,
+	pub id: InteractionId,
+	pub application_id: ApplicationId,
+	pub data: Option<InteractionData>,
+	pub guild_id: Option<ServerId>,
+	pub channel_id: ChannelId,
+	pub user: Option<User>,
+	pub member: Option<Member>,
+	/// A continuation token
+	pub token: String, // TODO: should this be a string?
+	/// for components, the message it was attached to
+	pub message: Option<Message>,
+}
+
+serial_decode!(Interaction);
 
 /// A private or public channel
 #[derive(Debug, Clone)]
@@ -825,6 +984,7 @@ serial_single_field!(MessageFlags as bits: u64);
 pub struct Message {
 	pub id: MessageId,
 	pub channel_id: ChannelId,
+	pub guild_id: Option<ServerId>,
 	pub content: String,
 	// carry on if nonce is absent or for some reason not a string
 	#[serde(deserialize_with = "::serial::ignore_errors")]
@@ -847,6 +1007,7 @@ pub struct Message {
 	pub attachments: Vec<Attachment>,
 	/// Follows OEmbed standard
 	pub embeds: Vec<Value>,
+	pub referenced_message: Option<Box<Message>>,
 
 	pub flags: MessageFlags,
 }
@@ -2097,6 +2258,8 @@ pub enum Event {
 	ReactionAdd(Reaction),
 	ReactionRemove(Reaction),
 
+	Interaction(Interaction),
+
 	/// An event type not covered by the above
 	Unknown(String, Object),
 	// Any other event. Should never be used directly.
@@ -2466,6 +2629,8 @@ impl Event {
 					last_pin_timestamp: try!(opt(&mut value, "last_pin_timestamp", into_timestamp)),
 				}
 			)
+		} else if kind == "INTERACTION_CREATE" {
+			Interaction::decode(Value::Object(value)).map(Event::Interaction)
 		} else {
 			Ok(Event::Unknown(kind, value))
 		}

@@ -85,6 +85,18 @@ builder! {
 
 	/// Inner patch content for the `send_embed` call.
 	EmbedFieldsBuilder(Vec<Value>);
+
+	/// Root content for the interactions response.
+	InteractionResponse(Object);
+
+	/// Content for the reply-to-interaction-with-message call.
+	InteractionMessage(Object);
+
+	/// Array of autocomplete options - up to 25
+	InteractionAutocompleteOptions(Object);
+
+	/// Content to register a command
+	RegisterApplicationCommand(Object);
 }
 
 macro_rules! set {
@@ -404,5 +416,91 @@ impl EmbedFieldsBuilder {
 			"inline": inline,
 		}});
 		self
+	}
+}
+
+impl InteractionResponse {
+	/// Set the type of the response - 
+	/// Name								Value	Description
+	/// PONG									1	ACK a Ping
+	/// CHANNEL_MESSAGE_WITH_SOURCE				4	respond to an interaction with a message
+	/// DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE	5	ACK an interaction and edit a response later, the user sees a loading state
+	/// DEFERRED_UPDATE_MESSAGE*				6	for components, ACK an interaction and edit the original message later; the user does not see a loading state
+	/// UPDATE_MESSAGE*							7	for components, edit the message the component was attached to
+	/// APPLICATION_COMMAND_AUTOCOMPLETE_RESULT	8	respond to an autocomplete interaction with suggested choices
+	/// 
+	/// https://canary.discord.com/developers/docs/interactions/receiving-and-responding#interaction-response-object-interaction-response-structure
+	pub fn r#type(self, r#type: u16) -> Self {
+		set!(self, "type", r#type)
+	}
+
+	/// TODO
+	pub fn data_message<F: FnOnce(InteractionMessage) -> InteractionMessage>(self, f: F) -> Self {
+		set!(self, "data", InteractionMessage::__build(f))
+	}
+}
+
+impl InteractionMessage {
+	/// Sets whether the message is TTS
+	pub fn tts(self, tts: bool) -> Self {
+		set!(self, "tts", tts)
+	}
+
+	/// Sets the message content
+	pub fn content(self, content: &str) -> Self {
+		set!(self, "content", content)
+	}
+
+	/// Adds an array of up to 10 embeds
+	pub fn embeds(self, embeds: Vec<&dyn Fn(EmbedBuilder) -> EmbedBuilder>) -> Self { // TODO: optimise, see if we can use map3
+		let built_vec = embeds.iter().map(|f| EmbedBuilder::__build(f)).collect::<Vec<_>>();
+		set!(self, "embed", built_vec)
+	}
+
+	/// Restrict allowed mentions for this message.
+	pub fn allowed_mentions<F: FnOnce(AllowedMentions) -> AllowedMentions>(self, f: F) -> Self {
+		set!(self, "allowed_mentions", AllowedMentions::__build(f))
+	}
+
+	/// Sets if only the user invoking the command can see the message
+	pub fn ephemeral(self, ephemeral: bool) -> Self {
+		if ephemeral {
+			set!(self, "flags", 1 << 6)
+		} else {
+			self
+		}
+	}
+
+	// TODO: components, attachments
+}
+
+impl InteractionAutocompleteOptions {
+	// TODO: choices
+}
+
+impl RegisterApplicationCommand {
+	/// Set command name
+	pub fn name(self, name: &str) -> Self {
+		set!(self, "name", name)
+	}
+
+	/// Set command description
+	pub fn description(self, description: &str) -> Self {
+		set!(self, "description", description)
+	}
+
+	/// Set command options
+	pub fn options(self, options: Vec<ApplicationCommandOption>) -> Self {
+		set!(self, "options", options)
+	}
+
+	/// Set default permission
+	pub fn default_permission(self, default_permission: bool) -> Self {
+		set!(self, "default_permission", default_permission)
+	}
+
+	/// Set the application command type
+	pub fn r#type(self, r#type: ApplicationCommandType) -> Self {
+		set!(self, "type", r#type as u16)
 	}
 }

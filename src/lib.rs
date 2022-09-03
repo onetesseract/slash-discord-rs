@@ -50,8 +50,8 @@ extern crate opus;
 #[cfg(feature = "voice")]
 extern crate sodiumoxide;
 
-use std::collections::BTreeMap;
 use std::time;
+use std::{collections::BTreeMap, io::Read};
 
 type Object = serde_json::Map<String, serde_json::Value>;
 
@@ -82,7 +82,7 @@ use ratelimit::RateLimits;
 pub use state::{ChannelRef, State};
 
 const USER_AGENT: &'static str = concat!(
-	"DiscordBot (https://github.com/SpaceManiac/discord-rs, ",
+	"discord-bot-lol (local lib , ",
 	env!("CARGO_PKG_VERSION"),
 	")"
 );
@@ -476,6 +476,128 @@ impl Discord {
 		))
 	}
 
+	/// Get all the registered global commands
+	pub fn get_global_commands(&self, appid: ApplicationId) -> Result<Vec<ApplicationCommand>> {
+		let response = request!(self, get, "/applications/{}/commands", appid);
+		from_reader(response)
+	}
+
+	/// Register a command globally - may take up to an hour to propagate
+	pub fn register_global_command_ex<
+		F: FnOnce(RegisterApplicationCommand) -> RegisterApplicationCommand,
+	>(
+		&self,
+		appid: ApplicationId,
+		f: F,
+	) -> Result<ApplicationCommand> {
+		let map = RegisterApplicationCommand::__build(f);
+		let body = serde_json::to_string(&map)?;
+		let response = request!(self, post(body), "/applications/{}/commands", appid);
+		from_reader(response)
+	}
+
+	/// Register a global command
+	pub fn register_global_command(
+		&self,
+		name: &str,
+		description: &str,
+		options: Vec<ApplicationCommandOption>,
+		r#type: ApplicationCommandType,
+		application_id: ApplicationId,
+		default_permission: bool,
+	) -> Result<ApplicationCommand> {
+		self.register_global_command_ex(application_id, |r| {
+			r.name(name)
+				.description(description)
+				.r#type(r#type)
+				.default_permission(default_permission)
+				.options(options)
+		})
+	}
+
+	/// Delete a global command
+	pub fn delete_global_command(&self, command: ApplicationCommand) -> Result<()> {
+		let response = request!(
+			self,
+			delete,
+			"/applications/{}/commands/{}",
+			command.application_id,
+			command.id.unwrap_or(CommandId(0)),
+		);
+		check_empty(response)
+	}
+
+	/// Edit the interaction's original response
+	pub fn edit_original_interaction_response_ex<F: FnOnce(SendMessage) -> SendMessage>(
+		&self,
+		interaction: &Interaction,
+		f: F,
+	) -> Result<Message> {
+		let map = SendMessage::__build(f);
+		let body = serde_json::to_string(&map)?;
+		let response = request!(
+			self,
+			patch(body),
+			"/webhooks/{}/{}/messages/@original",
+			interaction.application_id,
+			interaction.token
+		);
+		from_reader(response)
+	}
+
+	/// Edit an interactions original response
+	pub fn edit_original_interaction_response(
+		&self,
+		interaction: &Interaction,
+		text: &str,
+	) -> Result<Message> {
+		self.edit_original_interaction_response_ex(interaction, |b| b.content(text))
+	}
+
+	/// Get the original response to an interaction
+	pub fn get_original_interaction_response(&self, interaction: &Interaction) -> Result<Message> {
+		let response = request!(
+			self,
+			get,
+			"/webhooks/{}/{}/messages/@original",
+			interaction.application_id,
+			interaction.token
+		);
+		from_reader(response)
+	}
+
+	/// Respond to a given Interaction
+	pub fn respond_interaction_ex<F: FnOnce(InteractionResponse) -> InteractionResponse>(
+		&self,
+		interaction: &Interaction,
+		f: F,
+	) -> Result<()> {
+		let map = InteractionResponse::__build(f);
+		let body = serde_json::to_string(&map)?;
+		let response = request!(
+			self,
+			post(body),
+			"/interactions/{}/{}/callback",
+			interaction.id,
+			interaction.token
+		);
+		check_empty(response)
+	}
+
+	/// Respond to an interaction with a (optionally ephemeral) message immediately
+	pub fn respond_interaction_message_with_source(
+		&self,
+		interaction: &Interaction,
+		text: &str,
+		tts: bool,
+		ephemeral: bool,
+	) -> Result<()> {
+		self.respond_interaction_ex(interaction, |b| {
+			b.r#type(4)
+				.data_message(|c| c.content(text).tts(tts).ephemeral(ephemeral))
+		})
+	}
+
 	/// Send a message to a given channel.
 	///
 	/// The `nonce` will be returned in the result and also transmitted to other
@@ -649,9 +771,11 @@ impl Discord {
 			)
 		}
 
-		let tls = hyper_native_tls::NativeTlsClient::new().expect("Error initializing NativeTlsClient");
+		let tls =
+			hyper_native_tls::NativeTlsClient::new().expect("Error initializing NativeTlsClient");
 		let connector = hyper::net::HttpsConnector::new(tls);
-		let mut request = hyper::client::Request::with_connector(hyper::method::Method::Post, url, &connector)?;
+		let mut request =
+			hyper::client::Request::with_connector(hyper::method::Method::Post, url, &connector)?;
 		request
 			.headers_mut()
 			.set(hyper::header::Authorization(self.token.clone()));
@@ -1286,7 +1410,6 @@ impl Discord {
 
 	/// Download a user's avatar.
 	pub fn get_user_avatar(&self, user: UserId, avatar: &str) -> Result<Vec<u8>> {
-		use std::io::Read;
 		let mut response = retry(|| self.client.get(&self.get_user_avatar_url(user, avatar)))?;
 		let mut vec = Vec::new();
 		response.read_to_end(&mut vec)?;
@@ -1478,7 +1601,9 @@ impl Discord {
 		shard_id: u8,
 		total_shards: u8,
 	) -> Result<(Connection, ReadyEvent)> {
-		self.connection_builder()?.with_shard(shard_id, total_shards).connect()
+		self.connection_builder()?
+			.with_shard(shard_id, total_shards)
+			.connect()
 	}
 
 	/// Prepare to establish a websocket connection over which events can be
@@ -1493,7 +1618,9 @@ impl Discord {
 		let mut value: BTreeMap<String, String> = serde_json::from_reader(response)?;
 		match value.remove("url") {
 			Some(url) => Ok(url),
-			None => Err(Error::Protocol("Response missing \"url\" in Discord::get_gateway_url()"))
+			None => Err(Error::Protocol(
+				"Response missing \"url\" in Discord::get_gateway_url()",
+			)),
 		}
 	}
 }
@@ -1507,7 +1634,6 @@ fn from_reader<T: serde::de::DeserializeOwned, R: std::io::Read>(r: R) -> Result
 /// If the file's extension is `.png`, the claimed media type will be `image/png`, or `image/jpg`
 /// otherwise. Note that Discord may convert the image to JPEG or another format after upload.
 pub fn read_image<P: AsRef<::std::path::Path>>(path: P) -> Result<String> {
-	use std::io::Read;
 	let path = path.as_ref();
 	let mut vec = Vec::new();
 	std::fs::File::open(path)?.read_to_end(&mut vec)?;
@@ -1609,7 +1735,6 @@ fn check_status(
 /// debug information if it does not.
 fn check_empty(mut response: hyper::client::Response) -> Result<()> {
 	if response.status != hyper::status::StatusCode::NoContent {
-		use std::io::Read;
 		debug!("Expected 204 No Content, got {}", response.status);
 		for header in response.headers.iter() {
 			debug!("Header: {}", header);
@@ -1698,6 +1823,7 @@ impl ReceiverExt for websocket::client::Receiver<websocket::stream::WebSocketStr
 		use websocket::message::{Message, Type};
 		use websocket::ws::receiver::Receiver;
 		let message: Message = self.recv_message()?;
+
 		if message.opcode == Type::Close {
 			Err(Error::Closed(
 				message.cd_status_code,
@@ -1706,7 +1832,6 @@ impl ReceiverExt for websocket::client::Receiver<websocket::stream::WebSocketStr
 		} else if message.opcode == Type::Binary || message.opcode == Type::Text {
 			let mut payload_vec;
 			let payload = if message.opcode == Type::Binary {
-				use std::io::Read;
 				payload_vec = Vec::new();
 				flate2::read::ZlibDecoder::new(&message.payload[..])
 					.read_to_end(&mut payload_vec)?;
